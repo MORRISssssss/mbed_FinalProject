@@ -1,0 +1,10 @@
+.build
+.mbed
+projectfiles
+*.py*
+mbed-os
+BUILD
+
+bbcar
+erpc_c
+pwmin
