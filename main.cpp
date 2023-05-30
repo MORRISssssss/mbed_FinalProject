@@ -20,6 +20,8 @@ BBCar car(servo0_c, servo0_f, servo1_c, servo1_f, servo_ticker, servo_feedback_t
 
 BusInOut qti_pin(D4,D5,D6,D7);
 
+InterruptIn btn(BUTTON1);
+
 /** erpc infrastructure */
 ep::UARTTransport uart_transport(D1, D0, 9600);
 ep::DynamicMessageBufferFactory dynamic_mbf;
@@ -32,7 +34,7 @@ BBCarService_service car_control_service;
 
 /****** erpc declarations *******/
 
-bool tasking = true;
+bool tasking = false;
 
 void stop(){
     car.stop();
@@ -65,7 +67,7 @@ Thread QTI_thread;
 
 void start(){
     tasking = !tasking;
-    QTI_thread.start(QTI);
+    
 }
 
 int startAngle0 = car.servo0.angle;
@@ -88,17 +90,52 @@ double getSpeed(){
 
 }
 
+/*****************************/
+
+void turnLeftDegree(double speed, int degree){
+    int x = car.servo0.angle;
+    int target_ang = x - 22 * degree / 6.5;
+    printf("%d, %d\n", x, target_ang);
+    if (degree == 0)
+        return;
+    while (car.servo0.angle > target_ang) {
+        car.turn(speed, -0.1);
+        printf("%d\n", car.servo0.angle);
+        ThisThread::sleep_for(100ms);
+    }
+}
+
+void turnRightDegree(double speed, int degree){
+    int x = car.servo1.angle;
+    int target_ang = x + 22 * degree / 6.5;
+    printf("%d, %d\n", x, target_ang);
+    if (degree == 0)
+        return;
+    while (car.servo1.angle < target_ang) {
+        car.turn(speed, 0.1);
+        printf("%d\n", car.servo1.angle);
+        ThisThread::sleep_for(100ms);
+    }
+}
+
 void QTI(){
     car.stop();
     parallax_qti qti1(qti_pin);
     int pattern = 0b1111;
+    int pre_pattern = 0b1111;
     startAngle0 = car.servo0.angle;
     startAngle1 = car.servo1.angle;
+    int cnt = 0;
     while (true) {
         
         if (tasking){
             pattern = (int)qti1;
-            printf("%d%d%d%d\n",pattern/8, pattern%8/4, pattern%4/2, pattern%2);
+            //if (pattern != pre_pattern){
+                printf("%d%d%d%d\n",pattern/8, pattern%8/4, pattern%4/2, pattern%2);
+            //}
+            pre_pattern = pattern;
+            if (pattern != 0b1001)
+                cnt = 0;
             switch (pattern) {
                 case 0b0110: car.goStraight(-50); break;
                 case 0b1000: car.turn(-50, -0.1); break;
@@ -109,17 +146,67 @@ void QTI(){
                 case 0b0011: car.turn(-50, 0.1); break;
                 case 0b0111: car.turn(-50, 0.1); break;
                 case 0b0001: car.turn(-50, 0.1); break;
-                case 0b1111: car.goStraight(-50); break;
+                case 0b1111: 
+                    car.stop();
+                    ThisThread::sleep_for(500ms);
+                    car.turn(-50, -0.1); 
+                    ThisThread::sleep_for(1s);
+                    cnt = 0; 
+                    break;
                 case 0b0000: car.goStraight(50); break;
-                default: car.stop();
+                case 0b1001: 
+                    cnt++;
+                    if (cnt > 100){
+                        car.stop(); 
+                        tasking = false;
+                        cnt = 0;
+                    }
+                    break;
+                case 0b1010: 
+                    car.stop();
+                    ThisThread::sleep_for(500ms);
+                    car.goCertainDistance(-2.5);
+                    while (car.checkDistance(1)){
+                        car.goStraight(-50);
+                        ThisThread::sleep_for(100ms);
+                    }
+                    car.stop();
+                    ThisThread::sleep_for(500ms);
+                    turnLeftDegree(-50, 90); 
+                    break;
+                case 0b0101: 
+                    car.stop();
+                    ThisThread::sleep_for(500ms);
+                    car.goCertainDistance(-2.5);
+                    while (car.checkDistance(1)){
+                        car.goStraight(-50);
+                        ThisThread::sleep_for(100ms);
+                    }
+                    car.stop();
+                    ThisThread::sleep_for(500ms);
+                    turnRightDegree(-50, 90);
+                    break;
+                case 0b1101: 
+                    car.goStraight(-50);
+                    ThisThread::sleep_for(1500ms); 
+                    break;
+                default: car.stop(); cnt = 0; 
             }
+        }else{
+            car.stop();
         }
-        ThisThread::sleep_for(3ms);
+
+        ThisThread::sleep_for(1ms);
     }
 }
 
+void btn_ctrl(){
+    tasking = !tasking;
+}
 
 int main() {
+
+    btn.rise(&btn_ctrl);
 
     // Initialize the rpc server
     uart_transport.setCrc16(&crc16);
@@ -133,7 +220,7 @@ int main() {
     printf("Adding BBCar server.\n");
     rpc_server.addService(&car_control_service);
     
-    
+    QTI_thread.start(QTI);
 
     // Run the server. This should never exit
     printf("Running server.\n");
