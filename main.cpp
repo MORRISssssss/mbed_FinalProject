@@ -19,7 +19,7 @@ PwmOut servo0_c(D11), servo1_c(D13);
 BBCar car(servo0_c, servo0_f, servo1_c, servo1_f, servo_ticker, servo_feedback_ticker);
 
 BusInOut qti_pin(D4,D5,D6,D7);
-
+DigitalInOut pin8(D8);
 InterruptIn btn(BUTTON1);
 
 /** erpc infrastructure */
@@ -67,7 +67,7 @@ Thread QTI_thread;
 
 void start(){
     tasking = !tasking;
-    
+    car.stop();
 }
 
 int startAngle0 = car.servo0.angle;
@@ -92,31 +92,33 @@ double getSpeed(){
 
 /*****************************/
 
-void turnLeftDegree(double speed, int degree){
-    int x = car.servo0.angle;
-    int target_ang = x - 22 * degree / 6.5;
-    printf("%d, %d\n", x, target_ang);
-    if (degree == 0)
-        return;
-    while (car.servo0.angle > target_ang) {
-        car.turn(speed, -0.1);
-        printf("%d\n", car.servo0.angle);
-        ThisThread::sleep_for(100ms);
+void turnDegree(double speed, double factor, int degree){
+    if (factor < 0){
+        int x = car.servo0.angle;
+        int target_ang = x - 22 * degree / 6.5;
+        printf("%d, %d\n", x, target_ang);
+        if (degree == 0)
+            return;
+        while (car.servo0.angle > target_ang) {
+            car.turn(speed, -0.1);
+            printf("%d\n", car.servo0.angle);
+            ThisThread::sleep_for(100ms);
+        }
+    }else {
+        int x = car.servo1.angle;
+        int target_ang = x + 22 * degree / 6.5;
+        printf("%d, %d\n", x, target_ang);
+        if (degree == 0)
+            return;
+        while (car.servo1.angle < target_ang) {
+            car.turn(speed, 0.1);
+            printf("%d\n", car.servo1.angle);
+            ThisThread::sleep_for(100ms);
+        }
     }
+    
 }
 
-void turnRightDegree(double speed, int degree){
-    int x = car.servo1.angle;
-    int target_ang = x + 22 * degree / 6.5;
-    printf("%d, %d\n", x, target_ang);
-    if (degree == 0)
-        return;
-    while (car.servo1.angle < target_ang) {
-        car.turn(speed, 0.1);
-        printf("%d\n", car.servo1.angle);
-        ThisThread::sleep_for(100ms);
-    }
-}
 
 void QTI(){
     car.stop();
@@ -130,9 +132,7 @@ void QTI(){
         
         if (tasking){
             pattern = (int)qti1;
-            //if (pattern != pre_pattern){
-                printf("%d%d%d%d\n",pattern/8, pattern%8/4, pattern%4/2, pattern%2);
-            //}
+            //printf("%d%d%d%d\n",pattern/8, pattern%8/4, pattern%4/2, pattern%2);
             pre_pattern = pattern;
             if (pattern != 0b1001)
                 cnt = 0;
@@ -153,10 +153,14 @@ void QTI(){
                     ThisThread::sleep_for(1s);
                     cnt = 0; 
                     break;
-                case 0b0000: car.goStraight(50); break;
+                case 0b0000: 
+                    if (pre_pattern != 0b0110){
+                        car.goStraight(50); 
+                    }
+                    break;
                 case 0b1001: 
                     cnt++;
-                    if (cnt > 100){
+                    if (cnt > 5){
                         car.stop(); 
                         tasking = false;
                         cnt = 0;
@@ -172,7 +176,7 @@ void QTI(){
                     }
                     car.stop();
                     ThisThread::sleep_for(500ms);
-                    turnLeftDegree(-50, 90); 
+                    turnDegree(-50, -0.1, 90); 
                     break;
                 case 0b0101: 
                     car.stop();
@@ -184,7 +188,7 @@ void QTI(){
                     }
                     car.stop();
                     ThisThread::sleep_for(500ms);
-                    turnRightDegree(-50, 90);
+                    turnDegree(-50, 0.1, 90);
                     break;
                 case 0b1101: 
                     car.goStraight(-50);
@@ -192,21 +196,114 @@ void QTI(){
                     break;
                 default: car.stop(); cnt = 0; 
             }
-        }else{
-            car.stop();
         }
 
-        ThisThread::sleep_for(1ms);
+        ThisThread::sleep_for(3ms);
     }
 }
 
-void btn_ctrl(){
-    tasking = !tasking;
+double data[1000] = {0};
+int angles[1000] = {0};
+parallax_laserping ping1(pin8);
+
+int scan() {
+    int cnt = 0;
+    data[cnt] = (float)ping1;
+    angles[cnt++] = car.servo0.angle;
+    car.spin(-50);
+    ThisThread::sleep_for(2s);
+    car.stop();
+    ThisThread::sleep_for(1s);
+    ThisThread::sleep_for(100ms);
+    car.spin(50);
+    for (int i = 0; i < 50; i++){
+        data[cnt] = (float)ping1;
+        angles[cnt++] = car.servo0.angle;
+        ThisThread::sleep_for(50ms);
+    }
+    car.stop();
+    for (int i = 0; i < 60; i++){
+        data[cnt] = (float)ping1;
+        angles[cnt++] = car.servo0.angle;
+        ThisThread::sleep_for(50ms);
+    }
+    car.spin(-50);
+    ThisThread::sleep_for(2s);
+    car.stop();
+
+    int prev_ang = 0;
+    int barrier_cnt = 0;
+    int split = 0;
+    printf("%lf\n", data[0]);
+    for (int i = 0; i < 1000; i++){
+        if (data[i] == 0)
+            break;
+        if (abs(angles[i]) - abs(prev_ang)){
+            //printf("%d:%d \t", i, abs(angles[i]) - abs(prev_ang));
+            int n = data[i] / 10;
+            for (int j = 0; j < n; j++){
+                printf("*");
+            }
+            printf("\n");
+            prev_ang = angles[i];
+            if (data[i] < 180){
+                if (data[i] <= 20){
+                    barrier_cnt++;
+                }else{
+                    if (barrier_cnt >= 2){
+                        split++;
+                    }
+                    barrier_cnt = 0;
+                }
+            }
+            
+        }
+    }
+    printf("%d\n", split);
+    return split;
 }
+
+Thread LaserPing_thread;
+
+void LaserPing(){
+    while (true){
+        if (tasking){
+            double distance = (float)ping1;
+            printf("%lf\n", distance);
+            if (distance < 10) {
+                tasking = false;
+                car.stop();
+                ThisThread::sleep_for(500ms);
+                int split = scan();
+                if (split == 2){
+                    turnDegree(-50, -0.1, 270);
+                    car.stop();
+                    ThisThread::sleep_for(500ms);
+                    car.goStraight(-50);
+                    ThisThread::sleep_for(1s);
+                }else if (split == 1){
+                    car.spin(-100);
+                    int goal_ang = car.servo0.angle - 11 / 6.5 * 5.5 *11;
+                    while (car.servo0.angle > goal_ang){
+                        ThisThread::sleep_for(100ms);
+                    }
+                    car.goStraight(50);
+                    ThisThread::sleep_for(500ms);
+                }
+                
+                car.stop();
+                ThisThread::sleep_for(500ms);
+                tasking = true;
+            }
+        }
+        ThisThread::sleep_for(10ms);
+    }
+}
+
 
 int main() {
 
-    btn.rise(&btn_ctrl);
+    btn.rise(&start);
 
     // Initialize the rpc server
     uart_transport.setCrc16(&crc16);
@@ -221,6 +318,7 @@ int main() {
     rpc_server.addService(&car_control_service);
     
     QTI_thread.start(QTI);
+    LaserPing_thread.start(LaserPing);
 
     // Run the server. This should never exit
     printf("Running server.\n");
